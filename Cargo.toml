@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 axum = "0.7.5"
-cdk = { git = "https://github.com/cashubtc/cdk.git" , rev = "6298da79f56fbfa87f0ec261190574a28c96c6eb", features = ["wallet"]} 
-cdk-redb = { git = "https://github.com/cashubtc/cdk.git" , rev = "6298da79f56fbfa87f0ec261190574a28c96c6eb", features = ["wallet"]} 
+cdk = { git = "https://github.com/cashubtc/cdk.git" , rev = "54c50c3724f26c0167a4585b855dbd37bed6d50a", features = ["wallet"]} 
+cdk-redb = { git = "https://github.com/cashubtc/cdk.git" , rev = "54c50c3724f26c0167a4585b855dbd37bed6d50a", features = ["wallet"]} 
 hex = "0.4.3"
 ldk-node = "0.3.0"
 rand = "0.8.5"

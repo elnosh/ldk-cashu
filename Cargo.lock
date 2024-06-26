@@ -309,11 +309,10 @@ checksum = "96c51067fd44124faa7f870b4b1c969379ad32b2ba805aa959430ceaa384f695"
 [[package]]
 name = "cdk"
 version = "0.1.0"
-source = "git+https://github.com/cashubtc/cdk.git?rev=6298da79f56fbfa87f0ec261190574a28c96c6eb#6298da79f56fbfa87f0ec261190574a28c96c6eb"
+source = "git+https://github.com/cashubtc/cdk.git?rev=54c50c3724f26c0167a4585b855dbd37bed6d50a#54c50c3724f26c0167a4585b855dbd37bed6d50a"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "bip39",
  "bitcoin",
  "getrandom",
  "http 1.1.0",
@@ -334,7 +333,7 @@ dependencies = [
 [[package]]
 name = "cdk-redb"
 version = "0.1.0"
-source = "git+https://github.com/cashubtc/cdk.git?rev=6298da79f56fbfa87f0ec261190574a28c96c6eb#6298da79f56fbfa87f0ec261190574a28c96c6eb"
+source = "git+https://github.com/cashubtc/cdk.git?rev=54c50c3724f26c0167a4585b855dbd37bed6d50a#54c50c3724f26c0167a4585b855dbd37bed6d50a"
 dependencies = [
  "async-trait",
  "cdk",

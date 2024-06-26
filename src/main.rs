@@ -22,6 +22,9 @@ async fn main() {
         .route("/newaddress", get(routes::getnewaddress))
         .route("/openchannel", post(routes::open_channel))
         .route("/createinvoice", get(routes::receive))
+        .route("/payinvoice", post(routes::send))
+        .route("/receive-ecash", post(routes::receive_ecash))
+        .route("/send-ecash", get(routes::send_ecash))
         .layer(Extension(state.clone()));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();

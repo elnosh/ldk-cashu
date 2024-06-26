@@ -5,6 +5,7 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
+use cdk::Bolt11Invoice;
 use ldk_node::lightning::{ln::msgs::SocketAddress, util::ser::Writeable};
 use secp256k1::PublicKey;
 use serde::Deserialize;
@@ -34,6 +35,53 @@ pub async fn receive(
 
     let invoice = state.wallet.receive(amount).await.unwrap();
     Ok(Json(json!(invoice)))
+}
+
+#[derive(Deserialize)]
+pub struct InvoiceRequest {
+    invoice: String,
+}
+
+pub async fn send(
+    Extension(state): Extension<State>,
+    extract::Json(payload): extract::Json<InvoiceRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let invoice = Bolt11Invoice::from_str(payload.invoice.as_str()).unwrap();
+    let payment = state.wallet.pay_invoice(invoice).await.unwrap();
+    //let payment = hex::encode(payment.0);
+    Ok(Json(json!(payment)))
+}
+
+#[derive(Deserialize)]
+pub struct ReceiveEcash {
+    ecash: String,
+}
+
+pub async fn receive_ecash(
+    Extension(state): Extension<State>,
+    extract::Json(payload): extract::Json<ReceiveEcash>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let amount = state.wallet.receive_ecash(payload.ecash).await.unwrap();
+    Ok(Json(json!(format!("received {} ecash", amount))))
+}
+
+pub async fn send_ecash(
+    Extension(state): Extension<State>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let amount = match params.get("amount") {
+        Some(amount_param) => {
+            let amount: u64 = amount_param
+                .parse()
+                .map_err(|_| (StatusCode::BAD_REQUEST, Json(json!("invalid amount"))))?;
+
+            amount
+        }
+        None => return Err((StatusCode::BAD_REQUEST, Json(json!("amount not specified")))),
+    };
+    let ecash_token = state.wallet.send_ecash(amount).await.unwrap();
+
+    Ok(Json(json!(ecash_token)))
 }
 
 #[derive(Deserialize)]
