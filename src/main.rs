@@ -23,6 +23,7 @@ async fn main() {
         .route("/openchannel", post(routes::open_channel))
         .route("/createinvoice", get(routes::receive))
         .route("/payinvoice", post(routes::send))
+        .route("/swap", post(routes::swap))
         .route("/receive-ecash", post(routes::receive_ecash))
         .route("/send-ecash", get(routes::send_ecash))
         .layer(Extension(state.clone()));

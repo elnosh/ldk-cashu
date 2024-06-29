@@ -6,7 +6,10 @@ use axum::{
     Extension, Json,
 };
 use cdk::Bolt11Invoice;
-use ldk_node::lightning::{ln::msgs::SocketAddress, util::ser::Writeable};
+use ldk_node::{
+    lightning::{ln::msgs::SocketAddress, util::ser::Writeable},
+    UserChannelId,
+};
 use secp256k1::PublicKey;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -52,6 +55,26 @@ pub async fn send(
     Ok(Json(json!(payment)))
 }
 
+pub async fn swap(
+    Extension(state): Extension<State>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let amount_to_swap = match params.get("amount") {
+        Some(amount_param) => {
+            let amount: u64 = amount_param
+                .parse()
+                .map_err(|_| (StatusCode::BAD_REQUEST, Json(json!("invalid amount"))))?;
+
+            amount
+        }
+        None => return Err((StatusCode::BAD_REQUEST, Json(json!("amount not specified")))),
+    };
+
+    let _ = state.wallet.swap(amount_to_swap).await.unwrap();
+
+    Ok(Json(json!("swap successful")))
+}
+
 #[derive(Deserialize)]
 pub struct ReceiveEcash {
     ecash: String,
@@ -61,6 +84,7 @@ pub async fn receive_ecash(
     Extension(state): Extension<State>,
     extract::Json(payload): extract::Json<ReceiveEcash>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    println!("ecash: {}", payload.ecash);
     let amount = state.wallet.receive_ecash(payload.ecash).await.unwrap();
     Ok(Json(json!(format!("received {} ecash", amount))))
 }
@@ -119,6 +143,21 @@ pub async fn open_channel(
     let channel_id = hex::encode(channel_id.encode());
 
     Ok(Json(json!(channel_id)))
+}
+
+#[derive(Deserialize)]
+pub struct CloseChannel {
+    channel_id: String,
+}
+
+pub async fn close_channel(
+    Extension(state): Extension<State>,
+    extract::Json(payload): extract::Json<CloseChannel>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    //let channel_id = UserChannelId::from(payload.channel_id).unwrap();
+    // let _ = state.wallet.close_channel(channel_id).unwrap();
+    // Ok(Json(json!("channel closed")))
+    todo!()
 }
 
 pub async fn balance(
