@@ -6,10 +6,8 @@ use axum::{
     Extension, Json,
 };
 use cdk::Bolt11Invoice;
-use ldk_node::{
-    lightning::{ln::msgs::SocketAddress, util::ser::Writeable},
-    UserChannelId,
-};
+use hex_conservative::FromHex;
+use ldk_node::{bitcoin::Address, lightning::ln::msgs::SocketAddress, UserChannelId};
 use secp256k1::PublicKey;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -51,7 +49,6 @@ pub async fn send(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let invoice = Bolt11Invoice::from_str(payload.invoice.as_str()).unwrap();
     let payment = state.wallet.pay_invoice(invoice).await.unwrap();
-    //let payment = hex::encode(payment.0);
     Ok(Json(json!(payment)))
 }
 
@@ -84,7 +81,6 @@ pub async fn receive_ecash(
     Extension(state): Extension<State>,
     extract::Json(payload): extract::Json<ReceiveEcash>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    println!("ecash: {}", payload.ecash);
     let amount = state.wallet.receive_ecash(payload.ecash).await.unwrap();
     Ok(Json(json!(format!("received {} ecash", amount))))
 }
@@ -140,8 +136,6 @@ pub async fn open_channel(
         .open_channel(payload.amount_sat, node_pubkey, node_address)
         .unwrap();
 
-    let channel_id = hex::encode(channel_id.encode());
-
     Ok(Json(json!(channel_id)))
 }
 
@@ -154,10 +148,18 @@ pub async fn close_channel(
     Extension(state): Extension<State>,
     extract::Json(payload): extract::Json<CloseChannel>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    //let channel_id = UserChannelId::from(payload.channel_id).unwrap();
-    // let _ = state.wallet.close_channel(channel_id).unwrap();
-    // Ok(Json(json!("channel closed")))
-    todo!()
+    let channel_id: [u8; 16] = FromHex::from_hex(&payload.channel_id).unwrap();
+    let channel_id = UserChannelId::from(ldk_node::UserChannelId(u128::from_be_bytes(channel_id)));
+
+    let _ = state.wallet.close_channel(channel_id).unwrap();
+    Ok(Json(json!("channel closed")))
+}
+
+pub async fn list_channels(
+    Extension(state): Extension<State>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let channels = state.wallet.list_channels().unwrap();
+    Ok(Json(json!(channels)))
 }
 
 pub async fn balance(
@@ -167,9 +169,29 @@ pub async fn balance(
     Ok(Json(json!(balance)))
 }
 
-pub async fn getnewaddress(
+pub async fn new_address(
     Extension(state): Extension<State>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let address = state.wallet.new_address().unwrap();
-    Ok(Json(json!(address)))
+    Ok(Json(json!(address.to_string())))
+}
+
+#[derive(Deserialize)]
+pub struct SendToAddress {
+    address: String,
+    amount_sat: u64,
+}
+
+pub async fn send_to_address(
+    Extension(state): Extension<State>,
+    extract::Json(payload): extract::Json<SendToAddress>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let address = Address::from_str(&payload.address).unwrap();
+
+    let txid = state
+        .wallet
+        .send_to_address(&address, payload.amount_sat)
+        .unwrap();
+
+    Ok(Json(json!(txid)))
 }
