@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -17,6 +16,8 @@ use rand::Rng;
 use secp256k1::PublicKey;
 use serde::Serialize;
 use tokio::time::{sleep, timeout};
+
+use crate::error::Error;
 
 const DB_PATH: &str = "./walletdb";
 const MIN_CHANNEL_OPENING_SAT: u64 = 5_000_000;
@@ -109,20 +110,20 @@ impl LnCashuWallet {
         Ok(())
     }
 
-    pub async fn balance(&self) -> Balance {
-        let cashu_balance = self.cashu.total_balance().await.unwrap();
+    pub async fn balance(&self) -> Result<Balance, Error> {
+        let cashu_balance = self.cashu.total_balance().await?;
         let ln_node_balance = self.lightning_node.list_balances();
 
-        Balance {
+        Ok(Balance {
             cashu_balance: cashu_balance.into(),
             lightning_balance: ln_node_balance.total_lightning_balance_sats,
             onchain_balance: ln_node_balance.total_onchain_balance_sats,
             spendable_onchain_balance: ln_node_balance.spendable_onchain_balance_sats,
-        }
+        })
     }
 
     // dependending on liquidity receive through cashu or lightning node
-    pub async fn receive(self, amt: u64) -> Result<Bolt11Invoice, Box<dyn Error>> {
+    pub async fn receive(self, amt: u64) -> Result<Bolt11Invoice, Error> {
         // if enough inbound, get invoice from lightning node
         if self.inbound_for_amount(amt) {
             let invoice = self
@@ -163,7 +164,7 @@ impl LnCashuWallet {
         }
     }
 
-    pub async fn receive_ecash(&self, token: String) -> Result<u64, Box<dyn Error>> {
+    pub async fn receive_ecash(&self, token: String) -> Result<u64, Error> {
         let amount = self
             .cashu
             .receive(
@@ -177,11 +178,11 @@ impl LnCashuWallet {
         Ok(amount.into())
     }
 
-    pub async fn pay_invoice(&self, invoice: Bolt11Invoice) -> Result<String, Box<dyn Error>> {
+    pub async fn pay_invoice(&self, invoice: Bolt11Invoice) -> Result<String, Error> {
         // TODO: handle amountless invoices
 
         let invoice_amount = invoice.amount_milli_satoshis().unwrap() / 1000;
-        let balance = self.balance().await;
+        let balance = self.balance().await?;
 
         // try to pay invoice from cashu wallet first
         if balance.cashu_balance > invoice_amount {
@@ -191,22 +192,22 @@ impl LnCashuWallet {
                 .melt(melt_quote.id.as_str(), cdk::amount::SplitTarget::None)
                 .await?;
 
-            // TODO: check state of melt
-
-            return Ok(melt.preimage.unwrap());
+            // if mint could not pay invoice, try lightning node
+            match melt.state {
+                MeltQuoteState::Paid => return Ok(melt.preimage.unwrap()),
+                _ => {}
+            }
         }
 
         if balance.lightning_balance > invoice_amount {
             let payment = self.lightning_node.bolt11_payment().send(&invoice)?;
-            // this is probably wrong
-            return Ok(payment.to_string());
+            return Ok(payment.0.to_lower_hex_string());
         }
 
-        // TODO: return proper error
-        return Err("insufficient funds".into());
+        return Err(Error::InsufficientFunds);
     }
 
-    pub async fn send_ecash(&self, amount_sats: u64) -> Result<String, Box<dyn Error>> {
+    pub async fn send_ecash(&self, amount_sats: u64) -> Result<String, Error> {
         // TODO: why this send method returns a string instead of a Token
         let token = self
             .cashu
@@ -222,13 +223,13 @@ impl LnCashuWallet {
     }
 
     // swap (from cashu to ln node via jit channel or regular invoice if enough liquidity)
-    pub async fn swap(&self, target_amount_sats: u64) -> Result<(), Box<dyn Error>> {
+    pub async fn swap(&self, target_amount_sats: u64) -> Result<(), Error> {
         // TODO: have some config that sets the minimum amount for a channel opening
         // to avoid opening small channels
 
-        let balance = self.balance().await;
+        let balance = self.balance().await?;
         if balance.cashu_balance < target_amount_sats {
-            return Err("insufficient funds to make swap".into());
+            return Err(Error::InsufficientInboundForSwap);
         }
 
         let invoice = if self.inbound_for_amount(target_amount_sats) {
@@ -244,9 +245,11 @@ impl LnCashuWallet {
                     .bolt11_payment()
                     .receive_via_jit_channel(target_amount_sats, "", 3600, None)?
             } else {
-                return Err(
-                    "no inbound to make swap or amount too low to create new channel".into(),
-                );
+                if target_amount_sats < MIN_CHANNEL_OPENING_SAT {
+                    return Err(Error::AmountTooLowForChannel);
+                } else {
+                    return Err(Error::InsufficientInboundForSwap);
+                }
             }
         };
 
@@ -257,11 +260,9 @@ impl LnCashuWallet {
             .melt(melt_quote.id.as_str(), cdk::amount::SplitTarget::None)
             .await?;
 
-        // TODO: this is shit
         match melt.state {
             MeltQuoteState::Paid => return Ok(()),
-            MeltQuoteState::Unpaid => return Err("unable to make swap".into()),
-            MeltQuoteState::Pending => return Err("swap pending".into()),
+            _ => return Err(Error::MintCouldNotPayInvoice),
         }
     }
 
@@ -275,7 +276,7 @@ impl LnCashuWallet {
         false
     }
 
-    pub fn new_address(&self) -> Result<Address, Box<dyn Error>> {
+    pub fn new_address(&self) -> Result<Address, Error> {
         let address = self.lightning_node.onchain_payment().new_address()?;
         Ok(address)
     }
@@ -285,8 +286,9 @@ impl LnCashuWallet {
         amount_sats: u64,
         node_pubkey: Option<PublicKey>,
         node_address: Option<SocketAddress>,
-    ) -> Result<String, Box<dyn Error>> {
+    ) -> Result<String, Error> {
         // if pubkey or node address not specified, open channel to faucet
+
         let node_pubkey = node_pubkey.unwrap_or(
             PublicKey::from_str(
                 "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b",
@@ -310,7 +312,7 @@ impl LnCashuWallet {
         Ok(channel_id)
     }
 
-    pub fn close_channel(&self, channel_id: UserChannelId) -> Result<(), Box<dyn Error>> {
+    pub fn close_channel(&self, channel_id: UserChannelId) -> Result<(), Error> {
         let channels = self.lightning_node.list_channels();
         match channels
             .iter()
@@ -329,12 +331,12 @@ impl LnCashuWallet {
 
                 Ok(())
             }
-            None => return Err("channel does not exist".into()),
+            None => return Err(Error::ChannelNotExist),
         }
     }
 
     // list of channels
-    pub fn list_channels(&self) -> Result<Vec<ChannelInfo>, Box<dyn Error>> {
+    pub fn list_channels(&self) -> Result<Vec<ChannelInfo>, Error> {
         let channels = self.lightning_node.list_channels();
         let channels = channels
             .iter()
@@ -347,9 +349,8 @@ impl LnCashuWallet {
         &self,
         address: &Address<NetworkUnchecked>,
         amount_sat: u64,
-    ) -> Result<Txid, Box<dyn Error>> {
+    ) -> Result<Txid, Error> {
         let address = address.clone().require_network(Network::Signet).unwrap();
-
         let txid = self
             .lightning_node
             .onchain_payment()

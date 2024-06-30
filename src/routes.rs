@@ -12,6 +12,7 @@ use secp256k1::PublicKey;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::error::Error;
 use crate::wallet::LnCashuWallet;
 
 #[derive(Clone)]
@@ -25,16 +26,24 @@ pub async fn receive(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let amount = match params.get("amount") {
         Some(amount_param) => {
-            let amount: u64 = amount_param
-                .parse()
-                .map_err(|_| (StatusCode::BAD_REQUEST, Json(json!("invalid amount"))))?;
+            let amount: u64 = amount_param.parse().map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "invalid amount"})),
+                )
+            })?;
 
             amount
         }
-        None => return Err((StatusCode::BAD_REQUEST, Json(json!("amount not specified")))),
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "amount not specified"})),
+            ))
+        }
     };
 
-    let invoice = state.wallet.receive(amount).await.unwrap();
+    let invoice = state.wallet.receive(amount).await.map_err(handle_err)?;
     Ok(Json(json!(invoice)))
 }
 
@@ -47,8 +56,18 @@ pub async fn send(
     Extension(state): Extension<State>,
     extract::Json(payload): extract::Json<InvoiceRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let invoice = Bolt11Invoice::from_str(payload.invoice.as_str()).unwrap();
-    let payment = state.wallet.pay_invoice(invoice).await.unwrap();
+    let invoice = Bolt11Invoice::from_str(payload.invoice.as_str()).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid invoice"})),
+        )
+    })?;
+
+    let payment = state
+        .wallet
+        .pay_invoice(invoice)
+        .await
+        .map_err(handle_err)?;
     Ok(Json(json!(payment)))
 }
 
@@ -58,16 +77,27 @@ pub async fn swap(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let amount_to_swap = match params.get("amount") {
         Some(amount_param) => {
-            let amount: u64 = amount_param
-                .parse()
-                .map_err(|_| (StatusCode::BAD_REQUEST, Json(json!("invalid amount"))))?;
-
+            let amount: u64 = amount_param.parse().map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "invalid amount"})),
+                )
+            })?;
             amount
         }
-        None => return Err((StatusCode::BAD_REQUEST, Json(json!("amount not specified")))),
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "amount not specified"})),
+            ))
+        }
     };
 
-    let _ = state.wallet.swap(amount_to_swap).await.unwrap();
+    let _ = state
+        .wallet
+        .swap(amount_to_swap)
+        .await
+        .map_err(handle_err)?;
 
     Ok(Json(json!("swap successful")))
 }
@@ -81,7 +111,11 @@ pub async fn receive_ecash(
     Extension(state): Extension<State>,
     extract::Json(payload): extract::Json<ReceiveEcash>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let amount = state.wallet.receive_ecash(payload.ecash).await.unwrap();
+    let amount = state
+        .wallet
+        .receive_ecash(payload.ecash)
+        .await
+        .map_err(handle_err)?;
     Ok(Json(json!(format!("received {} ecash", amount))))
 }
 
@@ -91,15 +125,23 @@ pub async fn send_ecash(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let amount = match params.get("amount") {
         Some(amount_param) => {
-            let amount: u64 = amount_param
-                .parse()
-                .map_err(|_| (StatusCode::BAD_REQUEST, Json(json!("invalid amount"))))?;
+            let amount: u64 = amount_param.parse().map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "invalid amount"})),
+                )
+            })?;
 
             amount
         }
-        None => return Err((StatusCode::BAD_REQUEST, Json(json!("amount not specified")))),
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "amount not specified"})),
+            ))
+        }
     };
-    let ecash_token = state.wallet.send_ecash(amount).await.unwrap();
+    let ecash_token = state.wallet.send_ecash(amount).await.map_err(handle_err)?;
 
     Ok(Json(json!(ecash_token)))
 }
@@ -117,7 +159,12 @@ pub async fn open_channel(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let node_pubkey = match payload.node_pubkey {
         Some(pubkey) => {
-            let pubkey = PublicKey::from_str(pubkey.as_str()).unwrap();
+            let pubkey = PublicKey::from_str(pubkey.as_str()).map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "invalid public key"})),
+                )
+            })?;
             Some(pubkey)
         }
         None => None,
@@ -125,7 +172,12 @@ pub async fn open_channel(
 
     let node_address = match payload.node_address {
         Some(address) => {
-            let address = SocketAddress::from_str(address.as_str()).unwrap();
+            let address = SocketAddress::from_str(address.as_str()).map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "invalid address"})),
+                )
+            })?;
             Some(address)
         }
         None => None,
@@ -134,7 +186,7 @@ pub async fn open_channel(
     let channel_id = state
         .wallet
         .open_channel(payload.amount_sat, node_pubkey, node_address)
-        .unwrap();
+        .map_err(handle_err)?;
 
     Ok(Json(json!(channel_id)))
 }
@@ -148,7 +200,12 @@ pub async fn close_channel(
     Extension(state): Extension<State>,
     extract::Json(payload): extract::Json<CloseChannel>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let channel_id: [u8; 16] = FromHex::from_hex(&payload.channel_id).unwrap();
+    let channel_id: [u8; 16] = FromHex::from_hex(&payload.channel_id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid channel id"})),
+        )
+    })?;
     let channel_id = UserChannelId::from(ldk_node::UserChannelId(u128::from_be_bytes(channel_id)));
 
     let _ = state.wallet.close_channel(channel_id).unwrap();
@@ -158,21 +215,21 @@ pub async fn close_channel(
 pub async fn list_channels(
     Extension(state): Extension<State>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let channels = state.wallet.list_channels().unwrap();
+    let channels = state.wallet.list_channels().map_err(handle_err)?;
     Ok(Json(json!(channels)))
 }
 
 pub async fn balance(
     Extension(state): Extension<State>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let balance = state.wallet.balance().await;
+    let balance = state.wallet.balance().await.map_err(handle_err)?;
     Ok(Json(json!(balance)))
 }
 
 pub async fn new_address(
     Extension(state): Extension<State>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let address = state.wallet.new_address().unwrap();
+    let address = state.wallet.new_address().map_err(handle_err)?;
     Ok(Json(json!(address.to_string())))
 }
 
@@ -186,12 +243,24 @@ pub async fn send_to_address(
     Extension(state): Extension<State>,
     extract::Json(payload): extract::Json<SendToAddress>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let address = Address::from_str(&payload.address).unwrap();
+    let address = Address::from_str(&payload.address).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid address"})),
+        )
+    })?;
 
     let txid = state
         .wallet
         .send_to_address(&address, payload.amount_sat)
-        .unwrap();
+        .map_err(handle_err)?;
 
     Ok(Json(json!(txid)))
+}
+
+fn handle_err(err: Error) -> (StatusCode, Json<Value>) {
+    let err = json!({
+        "error": format!("{err}"),
+    });
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(err))
 }

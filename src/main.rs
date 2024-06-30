@@ -3,6 +3,7 @@ use axum::{
     Extension, Router,
 };
 
+mod error;
 mod routes;
 mod wallet;
 
