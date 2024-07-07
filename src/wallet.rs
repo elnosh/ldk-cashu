@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::exit;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,16 +12,17 @@ use hex_conservative::DisplayHex;
 use ldk_node::bitcoin::address::NetworkUnchecked;
 use ldk_node::bitcoin::{Address, Network, OutPoint, Txid};
 use ldk_node::lightning::ln::msgs::SocketAddress;
-use ldk_node::{Builder, ChannelDetails, Node, UserChannelId};
+use ldk_node::{AnchorChannelsConfig, Builder, ChannelDetails, Config, Node, UserChannelId};
 use rand::Rng;
 use secp256k1::PublicKey;
 use serde::Serialize;
 use tokio::time::{sleep, timeout};
 
 use crate::error::Error;
+use crate::lsp::LspClient;
 
 const DB_PATH: &str = "./walletdb";
-const MIN_CHANNEL_OPENING_SAT: u64 = 5_000_000;
+const MIN_CHANNEL_OPENING_SAT: u64 = 1_000_000;
 
 #[derive(Clone, Serialize)]
 pub struct Balance {
@@ -69,6 +71,7 @@ impl From<&ChannelDetails> for ChannelInfo {
 pub struct LnCashuWallet {
     cashu: Wallet,
     lightning_node: Arc<Node>,
+    lsp_client: LspClient,
 }
 
 impl LnCashuWallet {
@@ -77,19 +80,34 @@ impl LnCashuWallet {
         let path = Path::new(DB_PATH);
         let cashu_db = Arc::new(WalletRedbDatabase::new(path).unwrap());
 
-        let mut builder = Builder::new();
+        // hard-coding this now. should get from info endpoint
+        let trusted_peer = PublicKey::from_str(
+            "032ae843e4d7d177f151d021ac8044b0636ec72b1ce3ffcde5c04748db2517ab03",
+        )
+        .unwrap();
+
+        let anchor_channel_config = AnchorChannelsConfig {
+            trusted_peers_no_reserve: vec![trusted_peer],
+            ..Default::default()
+        };
+
+        let config = Config {
+            trusted_peers_0conf: vec![trusted_peer],
+            anchor_channels_config: Some(anchor_channel_config),
+            ..Default::default()
+        };
+
+        let mut builder = Builder::from_config(config);
+
+        //let mut builder = Builder::new();
         builder.set_network(Network::Signet);
         builder.set_esplora_server("https://mutinynet.com/api".to_string());
         builder.set_gossip_source_p2p();
+        builder.set_log_level(ldk_node::LogLevel::Trace);
+        builder.set_log_dir_path("./logs".to_string());
+        builder.set_storage_dir_path("./ldk-storage".to_string());
 
-        let lsp_addres = SocketAddress::from_str("45.33.17.66:39735").unwrap();
-        let lsp_pubkey = PublicKey::from_str(
-            "02c1745d21aab28234955666078778519ae55dc2a82ef0e7268340fd3893362b63",
-        )
-        .unwrap();
-        builder.set_liquidity_source_lsps2(lsp_addres, lsp_pubkey, None);
-
-        let node = builder.build().unwrap();
+        let node = Arc::new(builder.build().unwrap());
 
         LnCashuWallet {
             cashu: Wallet::new(
@@ -98,12 +116,25 @@ impl LnCashuWallet {
                 cashu_db,
                 &seed,
             ),
-            lightning_node: Arc::new(node),
+            lightning_node: node,
+            lsp_client: LspClient::default(),
         }
     }
 
     pub async fn start(&self) -> Result<(), String> {
         self.lightning_node.start().unwrap();
+
+        // hard-coding this now. should get from info endpoint
+        let trusted_peer = PublicKey::from_str(
+            "032ae843e4d7d177f151d021ac8044b0636ec72b1ce3ffcde5c04748db2517ab03",
+        )
+        .unwrap();
+        let address = SocketAddress::from_str("45.79.201.241:9735").unwrap();
+
+        let _ = self
+            .lightning_node
+            .connect(trusted_peer, address, true)
+            .unwrap();
 
         // TODO: start thread for checking events from ldk
 
@@ -179,7 +210,7 @@ impl LnCashuWallet {
     }
 
     pub async fn pay_invoice(&self, invoice: Bolt11Invoice) -> Result<String, Error> {
-        // TODO: handle amountless invoices
+        // TODO: amountless invoices
 
         let invoice_amount = invoice.amount_milli_satoshis().unwrap() / 1000;
         let balance = self.balance().await?;
@@ -229,21 +260,41 @@ impl LnCashuWallet {
 
         let balance = self.balance().await?;
         if balance.cashu_balance < target_amount_sats {
-            return Err(Error::InsufficientInboundForSwap);
+            return Err(Error::InsufficientFunds);
         }
 
         let invoice = if self.inbound_for_amount(target_amount_sats) {
-            self.lightning_node
-                .bolt11_payment()
-                .receive(target_amount_sats * 1000, "", 3600)?
+            let invoice = self.lightning_node.bolt11_payment().receive(
+                target_amount_sats * 1000,
+                "",
+                3600,
+            )?;
+            invoice
         } else {
             // if amount wanting to be swapped is above the minimum target for channel openings
             // then create invoice that when payed will create a JIT channel from the lsp
+
             if target_amount_sats > MIN_CHANNEL_OPENING_SAT {
-                // call receive_via_jit_channel
-                self.lightning_node
-                    .bolt11_payment()
-                    .receive_via_jit_channel(target_amount_sats, "", 3600, None)?
+                let target_amount_msat = target_amount_sats * 1000;
+
+                let fee_response = self
+                    .lsp_client
+                    .lsp_fee(target_amount_msat, self.lightning_node.node_id())
+                    .await?;
+
+                // create invoice for amount minus lsp fees
+                let node_invoice = self.lightning_node.bolt11_payment().receive(
+                    target_amount_msat - fee_response.fee_amount_msat,
+                    "",
+                    3600,
+                )?;
+
+                let wrapped_lsp_invoice = self
+                    .lsp_client
+                    .get_lsp_wrapped_invoice(fee_response.id, node_invoice)
+                    .await?;
+
+                wrapped_lsp_invoice
             } else {
                 if target_amount_sats < MIN_CHANNEL_OPENING_SAT {
                     return Err(Error::AmountTooLowForChannel);

@@ -4,6 +4,7 @@ use axum::{
 };
 
 mod error;
+mod lsp;
 mod routes;
 mod wallet;
 

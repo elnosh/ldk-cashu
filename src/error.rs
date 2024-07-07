@@ -17,10 +17,13 @@ pub enum Error {
     /// Channel does not exist
     #[error("channel does not exist")]
     ChannelNotExist,
-    /// LDK Error
+    /// LDK error
     #[error(transparent)]
     NodeStart(#[from] ldk_node::NodeError),
     /// CDK error
     #[error(transparent)]
     CdkError(#[from] cdk::wallet::error::Error),
+    /// Reqwest error
+    #[error(transparent)]
+    ReqwestError(#[from] reqwest::Error),
 }
